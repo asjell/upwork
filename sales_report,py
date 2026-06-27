@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+sales_report.py — Turn a messy sales CSV into a clean summary report.
+
+Reads a CSV of raw sales rows, cleans common data problems (blank rows,
+stray whitespace, bad numbers, inconsistent dates), then prints a summary
+to the terminal and writes a Markdown report you can hand to a client.
+
+Usage:
+    python sales_report.py data/sales.csv
+    python sales_report.py data/sales.csv --out report.md --top 5
+
+Expected columns (case-insensitive, extra columns are ignored):
+    date, product, region, quantity, unit_price
+
+Author: Asjal — Python & Web Developer
+"""
+
+import argparse
+import csv
+import sys
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+
+# Column names we look for, mapped to the variations clients actually send.
+COLUMN_ALIASES = {
+    "date":       {"date", "order_date", "day", "sold_on"},
+    "product":    {"product", "item", "sku", "name"},
+    "region":     {"region", "area", "territory", "zone"},
+    "quantity":   {"quantity", "qty", "units", "count"},
+    "unit_price": {"unit_price", "price", "rate", "amount"},
+}
+
+DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d")
+
+
+def resolve_columns(header):
+    """Map the file's real headers onto our canonical field names."""
+    lookup = {h.strip().lower(): h for h in header}
+    resolved = {}
+    for field, aliases in COLUMN_ALIASES.items():
+        match = next((lookup[a] for a in aliases if a in lookup), None)
+        if match is None and field in ("date", "product", "quantity", "unit_price"):
+            raise ValueError(
+                f"Required column '{field}' not found. "
+                f"Looked for any of: {', '.join(sorted(aliases))}"
+            )
+        resolved[field] = match
+    return resolved
+
+
+def parse_number(raw):
+    """Parse a number that may carry currency symbols, commas or spaces."""
+    if raw is None:
+        return None
+    cleaned = raw.strip().replace(",", "").replace("$", "").replace("Rs", "")
+    if cleaned == "":
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def parse_date(raw):
+    """Try several common date layouts; return None if none fit."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def load_rows(path, cols):
+    """Read and clean rows. Returns (clean_rows, skipped_count)."""
+    clean, skipped = [], 0
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            product = (row.get(cols["product"]) or "").strip()
+            qty = parse_number(row.get(cols["quantity"]))
+            price = parse_number(row.get(cols["unit_price"]))
+            date = parse_date(row.get(cols["date"])) if cols["date"] else None
+            region = (row.get(cols["region"]) or "Unspecified").strip() \
+                if cols["region"] else "Unspecified"
+
+            # Drop rows that are unusable for revenue math.
+            if not product or qty is None or price is None or qty <= 0 or price < 0:
+                skipped += 1
+                continue
+
+            clean.append({
+                "date": date,
+                "product": product,
+                "region": region or "Unspecified",
+                "quantity": qty,
+                "unit_price": price,
+                "revenue": qty * price,
+            })
+    return clean, skipped
+
+
+def summarize(rows):
+    """Compute the headline numbers and breakdowns."""
+    total_rev = sum(r["revenue"] for r in rows)
+    total_units = sum(r["quantity"] for r in rows)
+
+    by_product = defaultdict(lambda: {"revenue": 0.0, "units": 0.0})
+    by_region = defaultdict(float)
+    for r in rows:
+        by_product[r["product"]]["revenue"] += r["revenue"]
+        by_product[r["product"]]["units"] += r["quantity"]
+        by_region[r["region"]] += r["revenue"]
+
+    dates = [r["date"] for r in rows if r["date"]]
+    span = (min(dates), max(dates)) if dates else (None, None)
+
+    return {
+        "orders": len(rows),
+        "total_revenue": total_rev,
+        "total_units": total_units,
+        "avg_order": total_rev / len(rows) if rows else 0,
+        "by_product": by_product,
+        "by_region": dict(by_region),
+        "date_span": span,
+    }
+
+
+def money(n):
+    return f"${n:,.2f}"
+
+
+def build_report(stats, top_n, source_name, skipped):
+    """Render the summary as a Markdown string."""
+    top_products = sorted(
+        stats["by_product"].items(),
+        key=lambda kv: kv[1]["revenue"],
+        reverse=True,
+    )[:top_n]
+    regions = sorted(stats["by_region"].items(), key=lambda kv: kv[1], reverse=True)
+
+    start, end = stats["date_span"]
+    span_txt = f"{start} → {end}" if start else "dates not available"
+
+    lines = [
+        f"# Sales Report — {source_name}",
+        "",
+        f"_Generated {datetime.now():%d %b %Y, %H:%M}_",
+        "",
+        "## Overview",
+        "",
+        f"- **Orders processed:** {stats['orders']:,}",
+        f"- **Total revenue:** {money(stats['total_revenue'])}",
+        f"- **Units sold:** {stats['total_units']:,.0f}",
+        f"- **Average order value:** {money(stats['avg_order'])}",
+        f"- **Date range:** {span_txt}",
+        f"- **Rows skipped (bad/blank data):** {skipped}",
+        "",
+        f"## Top {len(top_products)} Products by Revenue",
+        "",
+        "| # | Product | Units | Revenue | Share |",
+        "|---|---------|------:|--------:|------:|",
+    ]
+    for i, (name, d) in enumerate(top_products, 1):
+        share = d["revenue"] / stats["total_revenue"] * 100 if stats["total_revenue"] else 0
+        lines.append(f"| {i} | {name} | {d['units']:,.0f} | {money(d['revenue'])} | {share:.1f}% |")
+
+    lines += ["", "## Revenue by Region", "", "| Region | Revenue | Share |", "|--------|--------:|------:|"]
+    for name, rev in regions:
+        share = rev / stats["total_revenue"] * 100 if stats["total_revenue"] else 0
+        lines.append(f"| {name} | {money(rev)} | {share:.1f}% |")
+
+    lines += ["", "---", "_Built with sales_report.py_", ""]
+    return "\n".join(lines)
+
+
+def print_terminal_summary(stats, skipped):
+    """A quick at-a-glance summary for the console."""
+    bar = "─" * 44
+    print(f"\n{bar}")
+    print("  SALES SUMMARY")
+    print(bar)
+    print(f"  Orders processed : {stats['orders']:,}")
+    print(f"  Total revenue    : {money(stats['total_revenue'])}")
+    print(f"  Units sold       : {stats['total_units']:,.0f}")
+    print(f"  Avg order value  : {money(stats['avg_order'])}")
+    if skipped:
+        print(f"  Rows skipped     : {skipped} (bad/blank data)")
+    print(bar)
+
+    top = sorted(stats["by_product"].items(), key=lambda kv: kv[1]["revenue"], reverse=True)[:3]
+    print("  Top products:")
+    for name, d in top:
+        print(f"    • {name:<24} {money(d['revenue'])}")
+    print(bar + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Generate a sales summary report from a CSV.")
+    ap.add_argument("csv_file", help="Path to the sales CSV file")
+    ap.add_argument("--out", default="sales_report.md", help="Output Markdown file (default: sales_report.md)")
+    ap.add_argument("--top", type=int, default=5, help="How many top products to list (default: 5)")
+    args = ap.parse_args()
+
+    path = Path(args.csv_file)
+    if not path.exists():
+        sys.exit(f"Error: file not found — {path}")
+
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            header = next(csv.reader(f))
+        cols = resolve_columns(header)
+    except (StopIteration, ValueError) as e:
+        sys.exit(f"Error reading '{path}': {e}")
+
+    rows, skipped = load_rows(path, cols)
+    if not rows:
+        sys.exit("No usable rows found after cleaning. Check the file's columns and values.")
+
+    stats = summarize(rows)
+    print_terminal_summary(stats, skipped)
+
+    report = build_report(stats, args.top, path.name, skipped)
+    Path(args.out).write_text(report, encoding="utf-8")
+    print(f"Report written to: {args.out}\n")
+
+
+if __name__ == "__main__":
+    main()
