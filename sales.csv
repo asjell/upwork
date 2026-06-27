@@ -1,0 +1,20 @@
+Date,Product,Region,Qty,Price
+2024-01-04,Wireless Mouse,North,12,"$15.50"
+2024-01-05,Mechanical Keyboard,South,5,"$78.00"
+2024-01-05,USB-C Hub,North,8,"42.00"
+2024-01-08, Wireless Mouse ,East,20,15.50
+2024-01-09,Laptop Stand,West,7,"$33.25"
+2024-01-11,Mechanical Keyboard,North,3,78.00
+2024-01-12,Webcam 1080p,South,9,"$56.75"
+2024-01-12,,East,4,12.00
+2024-01-14,USB-C Hub,West,15,"42.00"
+2024-01-15,Laptop Stand,North,11,33.25
+2024-01-18,Webcam 1080p,East,6,"56.75"
+2024-01-19,Mechanical Keyboard,East,abc,78.00
+2024-01-20,Wireless Mouse,South,18,"$15.50"
+2024-01-22,USB-C Hub,South,10,42.00
+
+2024-01-24,Laptop Stand,East,5,"$33.25"
+2024-01-25,Webcam 1080p,North,13,56.75
+2024-01-26,Mechanical Keyboard,West,4,"$78.00"
+2024-01-28,Wireless Mouse,West,22,15.50
