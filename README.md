@@ -1,6 +1,3 @@
-# upwork
-Python Project Demo
-
 # Sales Report Generator
 
 A command-line Python tool that turns a messy sales CSV into a clean summary report — in the terminal and as a shareable Markdown file.
